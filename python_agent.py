@@ -13,7 +13,7 @@ from neural_q_learner import NeuralQLearner
 from dqn import DQN_Config
 from policy import eGreedyPolicy
 from scheduler_agent import SchedulerAgent
-
+from evaluation import evaluation_function, simple_similarity_f
 
 ctx = decimal.Context()
 ctx.prec = 20
@@ -385,6 +385,13 @@ while frame_num < max_training_frames:
     agent_idx = state.player_turn
 
     a = agents[agent_idx].perceive(reward[agent_idx], state, done, is_eval)
+    if agent_idx == 1:
+        print(f"Frame {frame_num}")
+        print(f"Agent {agents[agent_idx].name}")
+        print(f"Goal {agents[agent_idx].goal_set}")
+        print(f"Action {agents[agent_idx].actions}")
+        print(f"Paired predicted actions {agents[agent_idx].external_agent_actions}")
+        print(f"Paired actual    actions {agents[0].actions}")
 
     # If we're in multiagent mode, and the other agent has a goal recogniser, update its goal probabilities.
     if n_agents == 2 and isinstance(agents[1 - agent_idx], SchedulerAgent) and agents[1 - agent_idx].goal_recogniser is not None:
@@ -422,10 +429,14 @@ while frame_num < max_training_frames:
                 score_str = score_str + '. Full score: ' + str(total_reward[1] + current_scenario["allegiance"][1] * total_reward[0]) + " (" + "{:.2f}".format((sum_total_reward[agent_combo_idx, 1] + current_scenario["allegiance"][1] * sum_total_reward[agent_combo_idx, 0]) / num_trials) + ")"
 
             print('Time step: ' + str(frame_num) + ', ep scores:' + score_str[1:])
+            my_eval_score = evaluation_function(agents[0].actions, agents[1].external_agent_actions,
+                                                simple_similarity_f, alpha=0.7)
+            print(f"Score: {my_eval_score}")
 
             if agent_params["eval_mode"]:
                 with open(agent_params["log_dir"] + results_filename, 'a') as fd:
-                    fd.write("'" + float_to_str(seed) + ',' + agents[0].name + ',' + agents[1].name + ',' + str(total_reward[0]) + ',' + str(total_reward[1]) + '\n')
+                    fd.write("'" + float_to_str(seed) + ',' + agents[0].name + ',' + agents[1].name + ',' + str(total_reward[0]) + ',' + str(total_reward[1]) + ',' + float_to_str(my_eval_score) +'\n')
+                    # fd.write("'" + float_to_str(seed) + ',' + agents[0].name + ',' + agents[1].name + ',' + str(total_reward[0]) + ',' + str(total_reward[1]) + '\n')
 
         reset_all()
 

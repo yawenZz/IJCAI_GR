@@ -77,6 +77,9 @@ class SchedulerAgent(Agent):
         self.external_agent_config = external_agent_config
         self.model_choice_idx = -1
 
+        self.actions = []
+        self.external_agent_actions = []
+
         if external_agent_config is not None:
             self.device = torch.device("cuda" if self.external_agent_config.gpu >= 0 else "cpu")
         
@@ -100,6 +103,8 @@ class SchedulerAgent(Agent):
         for item in self.goal_set:
             self.plans.append(plan.str_to_plan(item, self.num_targets_per_item))
 
+        self.actions = []
+        self.external_agent_actions = []
 
     def get_possible_targets(self, state):
         targets = []
@@ -337,7 +342,26 @@ class SchedulerAgent(Agent):
                 if a is None:
                     return random.randrange(state.action_space.n)
 
-            return a
+        # store the action
+        self.actions.append(a)
+        # if len(self.actions) >= 5:
+        #     last_five_actions = self.actions[-5:]
+        #     print(f"[scheduler.py] Agent {self.name} actions: {last_five_actions}")
+        # else:
+        #     print(f"[scheduler.py] Agent {self.name} actions: {self.actions}")
+
+        # simulate external agent's action
+        if self.goal_recogniser.current_hypothesis is None:
+            self.goal_recogniser.update_hypothesis()
+        external_agent_action = self.get_external_agent_sim_action(state)
+        self.external_agent_actions.append(external_agent_action)
+        # if len(self.external_agent_actions) >= 5:
+        #     last_five_actions = self.external_agent_actions[-5:]
+        #     print(f"[scheduler.py] Predicted actions: {last_five_actions}")
+        # else:
+        #     print(f"[scheduler.py] Predicted actions: {self.external_agent_actions}")
+
+        return a
 
 
     def select(self, current_node, player_turn : int, n_rollouts : int):
