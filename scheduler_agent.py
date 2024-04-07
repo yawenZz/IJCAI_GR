@@ -226,6 +226,7 @@ class SchedulerAgent(Agent):
 
                 # Run the rollout.
                 _, rollout_return = self.rollout(state_copy)
+                # print(f"rollout return in choose_next_target(): {rollout_return}")
                 n_rollouts += 1
 
                 # Backpropagate the returns.
@@ -252,6 +253,7 @@ class SchedulerAgent(Agent):
                 selected = choice
                 best_eval = eval
 
+        # print(f"target in choose_next_target(): {selected.target}")
         return selected.target, state.get_object_type_at_square(selected.target)
 
 
@@ -324,7 +326,6 @@ class SchedulerAgent(Agent):
         if self.mcts_style == constants.I_RM:
 
             a = self.get_action_atomic(state)
-            return a
 
         else:
 
@@ -489,6 +490,7 @@ class SchedulerAgent(Agent):
                 
                 # Run the rollout.
                 _, rollout_return = self.rollout(state_copy, top_level_plan=current_top_level_plan, target=current_target, print_debug=(alpha_iter > (self.alpha - 3)))
+                # print(f"rollout return in get_action_atomic(): {rollout_return}")
                 n_rollouts += 1
 
                 # Backpropagate the returns.
@@ -508,6 +510,7 @@ class SchedulerAgent(Agent):
         for choice in root_node.children:
 
             # Note: This currently assumes that there are only two agents in the environment.
+            # 根据rollout更新的total return来计算eval值，选出最大的结果
             eval = (choice.total_return[self.agent_num] + self.get_allegiance() * choice.total_return[1 - self.agent_num]) / (choice.visits + tiny_val) \
                 + tiny_val * random.random() # For tie-breaking
    
@@ -515,6 +518,7 @@ class SchedulerAgent(Agent):
                 selected = choice
                 best_eval = eval
 
+        # print(f"action in get_action_atomic(): {selected.action}")
         return selected.action
 
 
@@ -546,7 +550,10 @@ class SchedulerAgent(Agent):
         return assumed_reward_func
 
 
-    def get_external_agent_sim_action(self, state) -> int:
+    def get_external_agent_sim_action(self, state: object) -> int:
+        """
+        对应论文第五节：从目标中挑选next action
+        """
 
         if self.single_player:
             return NO_OP
@@ -616,7 +623,10 @@ class SchedulerAgent(Agent):
 
 
     def rollout(self, state : CooperativeCraftWorldState, top_level_plan=None, target=None, print_debug=False):
-
+        """
+        Returns:
+            tuple: the simulated final state, and the cumulative rewards for each agent.
+        """
         state_copy = copy.deepcopy(state)
 
         if target is None:
@@ -643,6 +653,7 @@ class SchedulerAgent(Agent):
 
             steps_forward += 1
 
+        # print(f"rollout return: {state_copy, ret}")
         return (state_copy, ret)
 
 

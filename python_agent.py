@@ -26,7 +26,7 @@ def float_to_str(f):
     d1 = ctx.create_decimal(repr(f))
     return format(d1, 'f')
 
-
+# command line argv
 if len(sys.argv) < 2:
     print('Usage:', sys.argv[0], 'scenario')
     sys.exit()
@@ -81,6 +81,7 @@ else:
     n_agents = 2
     gpu = -1 # Use CPU when not training
 
+# rollout style
 main_rollout_style = constants.SUBGOAL_LEVEL_NON_COMMITTAL
 main_kl_tol = 2.5
 main_hyp_mom = 0.95
@@ -94,7 +95,7 @@ num_targets_per_item = 1
 
 env = CooperativeCraftWorld(current_scenario, size=size, n_agents=n_agents, allow_no_op=False, render=False, ingredient_regen=current_scenario["regeneration"], max_steps=max_steps)
 
-agent_params["agent_type"] = "dqn"
+agent_params["agent_type"] = "dqn"  # Deep Q-Network (DQN) algorithm used
 
 # Optimizer settings
 agent_params["adam_lr"] = 0.000125
@@ -102,6 +103,7 @@ agent_params["adam_eps"] = 0.00015
 agent_params["adam_beta1"] = 0.9
 agent_params["adam_beta2"] = 0.999
 
+# output files
 agent_params["log_dir"] = os.path.dirname(os.path.realpath(__file__))
 agent_params["log_dir"] = agent_params["log_dir"] + "/results/" + env_name + '_' + agent_params["agent_type"] + "/"
 if not os.path.exists(agent_params["log_dir"]):
@@ -115,6 +117,8 @@ eval_freq = 250000 # As per Rainbow paper
 eval_steps = 125000 # As per Rainbow paper
 eval_start_time = 1000000 # Don't start evaluating until gifted items at the start of training are phased out.
 agent_params["eval_ep"] = 0.01
+
+# OUTPUT: eval_scores.csv 【不清楚这个记录的目的】
 learning_curves_csv_filename = 'eval_scores.csv'
 with open(agent_params["log_dir"] + learning_curves_csv_filename,'a') as fd:
     fd.write('Frame,Score\n')
@@ -155,12 +159,12 @@ transition_params["agent_params"] = agent_params
 transition_params["replay_size"] = 1000000
 transition_params["bufferSize"] = 512
 
-
 # Training agent
 agent_q_learner = NeuralQLearner("Q_learner", agent_params, transition_params)
 
-
-########## PAIRED AGENTS ##########
+######################
+#### PAIRED AGENTS ###
+######################
 agent_params_greedy = copy.deepcopy(agent_params)
 agent_params_greedy["exploration_style"] = "e_greedy"
 agent_params_greedy["eval_ep"] = 0.01
@@ -220,8 +224,18 @@ agent_i_rm_paired = SchedulerAgent("Psychic",
         gamma=gamma,
         external_agent_config=agent_params["dqn_config"])
 
+###################
+#### BASELINES ####
+###################
+# 1. Q-learn: A DQN agent [Mnih et al., 2015], trained in a
+# single-agent version of the environment.
+agent_params_baseline = copy.deepcopy(agent_params)
+agent_params_baseline["exploration_style"] = "e_greedy"
+agent_params_baseline["eval_ep"] = 0.01
+agent_q_learner_baseline = NeuralQLearner("Q_learner_baseline", agent_params_baseline, transition_params)
 
-########## BASELINES ##########
+# 2. SP : Yao et al.’s (2016) scheduler,
+# based on single player Monte Carlo Tree Search.
 agent_sp = SchedulerAgent("SP_MCTS",
         main_rollout_style,
         None, # No goal recogniser, since using single player MCTS
@@ -236,6 +250,8 @@ agent_sp = SchedulerAgent("SP_MCTS",
         gamma=gamma,
         external_agent_config=agent_params["dqn_config"])
 
+# 3. IRM: A reimplementation of Dann et al.’s (2022) multi-agent scheduler
+# assumes a priori knowledge of the paired agent’s goals.
 agent_i_rm = SchedulerAgent("Psychic",
         main_rollout_style,
         GoalRecogniser(model_temperature=0.01,
@@ -256,14 +272,9 @@ agent_i_rm = SchedulerAgent("Psychic",
         gamma=gamma,
         external_agent_config=agent_params["dqn_config"])
 
-
-agent_params_baseline = copy.deepcopy(agent_params)
-agent_params_baseline["exploration_style"] = "e_greedy"
-agent_params_baseline["eval_ep"] = 0.01
-agent_q_learner_baseline = NeuralQLearner("Q_learner_baseline", agent_params_baseline, transition_params)
-
-
-########## OUR APPROACH ##########
+#####################
+### OUR APPROACH ####
+#####################
 agent_goal_rec = SchedulerAgent("Goal_Recogniser",
         main_rollout_style,
         GoalRecogniser(model_temperature=0.01,
@@ -296,25 +307,25 @@ done = False
 
 if n_agents > 1:
     agent_combos = [    
-        [agent_q_learner_paired, agent_q_learner_baseline],
-        [agent_q_learner_paired, agent_sp],
-        [agent_q_learner_paired, agent_i_rm],
-        [agent_q_learner_paired, agent_goal_rec],
+        # [agent_q_learner_paired, agent_q_learner_baseline],
+        # [agent_q_learner_paired, agent_sp],
+        # [agent_q_learner_paired, agent_i_rm],
+        # [agent_q_learner_paired, agent_goal_rec],
 
-        [agent_sp_paired, agent_q_learner_baseline],
-        [agent_sp_paired, agent_sp],
-        [agent_sp_paired, agent_i_rm],
-        [agent_sp_paired, agent_goal_rec],
+        # [agent_sp_paired, agent_q_learner_baseline],
+        # [agent_sp_paired, agent_sp],
+        # [agent_sp_paired, agent_i_rm],
+        # [agent_sp_paired, agent_goal_rec],
 
-        [agent_goal_rec_paired, agent_q_learner_baseline],
-        [agent_goal_rec_paired, agent_sp],
-        [agent_goal_rec_paired, agent_i_rm],
+        # [agent_goal_rec_paired, agent_q_learner_baseline],
+        # [agent_goal_rec_paired, agent_sp],
+        # [agent_goal_rec_paired, agent_i_rm],
         [agent_goal_rec_paired, agent_goal_rec],
 
-        [agent_i_rm_paired, agent_q_learner_baseline],
-        [agent_i_rm_paired, agent_sp],
-        [agent_i_rm_paired, agent_i_rm],
-        [agent_i_rm_paired, agent_goal_rec],
+        # [agent_i_rm_paired, agent_q_learner_baseline],
+        # [agent_i_rm_paired, agent_sp],
+        # [agent_i_rm_paired, agent_i_rm],
+        # [agent_i_rm_paired, agent_goal_rec],
     ]
 else:
     agent_combos = [[agent_q_learner]]
@@ -357,7 +368,7 @@ def reset_all():
     for i in range(len(agents)):
         agents[i].allegiance = current_scenario["allegiance"][i]
         if n_agents == 2 and isinstance(agents[i], SchedulerAgent) and agents[i].goal_recogniser is not None:
-            agents[i].goal_recogniser.set_external_agent(agents[1 - i])
+            agents[i].goal_recogniser.set_external_agent(agents[1 - i])  #TODO: 所以其实互为彼此的外部代理，但是eval_agent还是有差的？
 
     state = env.reset(agents, seed)
 
@@ -375,6 +386,7 @@ def reset_all():
 
 reset_all()
 
+# OUTPUT: result_scenario_n.csv (1) header
 if agent_params["eval_mode"]:
     results_filename = 'results_' + sys.argv[1] + '.csv'
     with open(agent_params["log_dir"] + results_filename, 'w') as fd:
@@ -409,7 +421,7 @@ while frame_num < max_training_frames:
         frame_num += 1
 
     if done:
-        if is_eval:
+        if is_eval:  #TODO: 没见这部分跑过；agent_params["eval_mode"]是没错，但is_eval=false
             print('Evaluation time step: ' + str(steps_since_eval_began) + ', episode ended with score: ' + str(total_reward[0]))
             eval_total_score += total_reward[0]
             eval_total_episodes += 1
@@ -428,11 +440,13 @@ while frame_num < max_training_frames:
             if agent_params["eval_mode"]:
                 score_str = score_str + '. Full score: ' + str(total_reward[1] + current_scenario["allegiance"][1] * total_reward[0]) + " (" + "{:.2f}".format((sum_total_reward[agent_combo_idx, 1] + current_scenario["allegiance"][1] * sum_total_reward[agent_combo_idx, 0]) / num_trials) + ")"
 
+            # OUTPUT: terminal
             print('Time step: ' + str(frame_num) + ', ep scores:' + score_str[1:])
             my_eval_score = evaluation_function(agents[0].actions, agents[1].external_agent_actions,
                                                 simple_similarity_f, alpha=0.7)
             print(f"Score: {my_eval_score}")
 
+            # OUTPUT: result_scenario_n.csv (2) results
             if agent_params["eval_mode"]:
                 with open(agent_params["log_dir"] + results_filename, 'a') as fd:
                     fd.write("'" + float_to_str(seed) + ',' + agents[0].name + ',' + agents[1].name + ',' + str(total_reward[0]) + ',' + str(total_reward[1]) + ',' + float_to_str(my_eval_score) +'\n')
