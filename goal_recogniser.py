@@ -97,6 +97,7 @@ class GoalRecogniser(object):
             for id in self.other_agent.externally_visible_goal_sets:
                 header = header + ", " + id
 
+            # moving_kl_div.csv: externally_visible_goal_sets
             with open(self.log_dir + 'moving_kl_div.csv', file_mode) as fd:
                 fd.write(header + "\n")
 
@@ -116,15 +117,19 @@ class GoalRecogniser(object):
             with open(self.log_dir + 'state_log.txt', 'a') as fd:
                 fd.write("\n\nSTEP: " + str(self.step_number) + "\n")
 
+            # OUTPUT: state_log.txt - print Craft World states【和action有关】
             state.render(log_dir=self.log_dir)
 
 
     def update_hypothesis(self):
-
+        """
+            current_hypothesis: = selected_goals[], 所有推测出的目标
+        """
         arg_min = np.argmin(self.total_kl_moving_avg_debiased)
         min_kl = self.total_kl_moving_avg_debiased[arg_min]
 
         selected_goals = []
+        # GOAL INFERENCE
         for i in range(0, len(self.total_kl_moving_avg_debiased)):
             if self.total_kl_moving_avg_debiased[i] <= min_kl + self.kl_tolerance:
                 selected_goals.append(self.other_agent.externally_visible_goal_sets[i])

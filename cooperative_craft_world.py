@@ -104,6 +104,9 @@ class CooperativeCraftWorldState():
 
 
     def step(self, action, assumed_reward_func=_reward):
+        """
+        update location and reward of the player
+        """
 
         reward = [0] * self.n_agents
 
@@ -278,6 +281,7 @@ class CooperativeCraftWorldState():
 
         print_or_log("", filename)
 
+        # state_log.txt: print resources
         sorted_keys = sorted(self.inventory[0].keys())
         for k in sorted_keys:
             inv_str = k + ":"
