@@ -551,20 +551,18 @@ class SchedulerAgent(Agent):
 
 
     def get_external_agent_sim_action(self, state: object) -> int:
-        """
-        对应论文第五节：从目标中挑选next action
-        """
 
         if self.single_player:
             return NO_OP
 
         if self.external_agent_config is not None:
-
+            # prepare the environment state
             state = torch.from_numpy(state.getRepresentation()).float().to(self.device).unsqueeze(0)
 
             if self.psychic:
                 q = self.goal_recogniser.models[self.goal_recogniser.other_agent.goal].forward(state).cpu().detach().squeeze()
             else:
+                # --- Section 5 Algorithm --- #
                 # Assume that the agent will follow the hypothesised goal with the greatest Q-value.
                 hypothesis_array = self.goal_recogniser.current_hypothesis.split("_and_")
                 if len(hypothesis_array) == 1:
@@ -575,6 +573,8 @@ class SchedulerAgent(Agent):
                         self.model_choice_idx = random.randrange(len(hypothesis_array))
 
                     q = self.goal_recogniser.models[hypothesis_array[self.model_choice_idx]].forward(state).cpu().detach().squeeze()
+
+                    # If Qmax < threshold, switch to pursuing the goal that currently has the greatest Q-value.
                     if q.max().item() < 0.5:
                         for i in range(0, len(hypothesis_array)):
                             q_tmp = self.goal_recogniser.models[hypothesis_array[i]].forward(state).cpu().detach().squeeze()
