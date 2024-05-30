@@ -27,6 +27,8 @@ class MCTS_Node(object):
         self.children = None
         self.visits = 0
         self.total_return = [0] * n_agents
+        self.sim_self_actions = []
+        self.sim_external_actions = []
 
     def is_leaf(self):
         return self.children is None
@@ -37,6 +39,11 @@ class MCTS_Node(object):
             for possible_goal_plan, possible_action in possible_actions_by_goal_plan.items():
                 self.children.append(MCTS_Node(possible_goal_plan[0], possible_goal_plan[1], possible_action, self.n_agents))
 
+    def update_sim_actions(self, player_actions):
+        self.sim_self_actions = player_actions
+
+    def update_sim_external_actions(self, external_agent_actions):
+        self.sim_external_actions = external_agent_actions
 
 class MCTS_Node_Subgoal_Level(object):
 
@@ -46,6 +53,8 @@ class MCTS_Node_Subgoal_Level(object):
         self.children = None
         self.visits = 0
         self.total_return = [0] * n_agents
+        self.sim_self_actions = []
+        self.sim_external_actions = []
 
     def is_leaf(self):
         return self.children is None
@@ -56,6 +65,19 @@ class MCTS_Node_Subgoal_Level(object):
             for target in possible_targets:
                 self.children.append(MCTS_Node_Subgoal_Level(target, self.n_agents))
 
+    def update_sim_actions(self, player_actions):
+        self.sim_self_actions = player_actions
+
+    def update_sim_external_actions(self, external_agent_actions):
+        self.sim_external_actions = external_agent_actions
+
+    def display_tree_structure(self, depth=0):
+        if self.children is not None:
+            print("  " * depth, f"Target: {self.target}, Visits: {self.visits}, Return: {self.total_return}, ExternalActions: {self.sim_external_actions}")
+            for child in self.children:
+                child.display_tree_structure(depth + 1)
+        else:
+            print("  " * depth, f"Leaf Node - Target: {self.target}, Visits: {self.visits}, Return: {self.total_return}, ExternalActions: {self.sim_external_actions}")
 
 class SchedulerAgent(Agent):
 
@@ -77,8 +99,9 @@ class SchedulerAgent(Agent):
         self.external_agent_config = external_agent_config
         self.model_choice_idx = -1
 
-        self.actions = []
-        self.external_agent_actions = []
+        self.self_actions = []
+        self.sim_self_actions = []
+        self.sim_external_agent_actions = []
 
         if external_agent_config is not None:
             self.device = torch.device("cuda" if self.external_agent_config.gpu >= 0 else "cpu")
@@ -103,8 +126,9 @@ class SchedulerAgent(Agent):
         for item in self.goal_set:
             self.plans.append(plan.str_to_plan(item, self.num_targets_per_item))
 
-        self.actions = []
-        self.external_agent_actions = []
+        self.self_actions = []
+        self.sim_self_actions = []
+        self.sim_external_agent_actions = []
 
     def get_possible_targets(self, state):
         targets = []
@@ -160,19 +184,41 @@ class SchedulerAgent(Agent):
 
 
     def choose_next_target(self, state, possible_targets):
+        print("---choose_next_target()---")
 
         # Can take shortcut if there not multiple possible targets.
         if len(possible_targets) == 0:
+            # update simulated actions for the agent
+            state_copy = copy.deepcopy(state)
+            _, _, player_actions, external_agent_actions = self.rollout(state_copy)  # Run the rollout
+            self.sim_self_actions = player_actions
+            self.sim_external_agent_actions = external_agent_actions
+
             return None, None
         elif len(possible_targets) == 1:
             best_target = list(possible_targets)[0]
+
+            # update simulated actions for the agent
+            state_copy = copy.deepcopy(state)
+            _, _, player_actions, external_agent_actions = self.rollout(state_copy)  # Run the rollout
+            self.sim_self_actions = player_actions
+            self.sim_external_agent_actions = external_agent_actions
+
             return best_target, state.get_object_type_at_square(best_target)
 
         if self.beta == 0:
             random_target = possible_targets[random.randrange(len(possible_targets))]
+
+            # update simulated actions for the agent
+            state_copy = copy.deepcopy(state)
+            _, _, player_actions, external_agent_actions = self.rollout(state_copy)  # Run the rollout
+            self.sim_self_actions = player_actions
+            self.sim_external_agent_actions = external_agent_actions
+
             return random_target, state.get_object_type_at_square(random_target)
 
         # --== Main MCTS algorithm begins here ==--
+        print("-----MCTS-----")
 
         root_node = MCTS_Node_Subgoal_Level(None, state.n_agents)
         n_rollouts = 0
@@ -189,11 +235,14 @@ class SchedulerAgent(Agent):
 
             state_copy = copy.deepcopy(state)
             current_node = root_node
-            visited = [] # We don't actually need to backpropagate anything to the root node; only its children matter for final action selection.
+            visited = []
+                # We don't actually need to backpropagate anything to the root node;
+                # only its children matter for final action selection.
             returns = []
             steps_taken = []
 
             can_look_further = True
+            # when can_look_further is True & current node is root -
             while can_look_further and not current_node.is_leaf():
                 current_node = self.select(current_node, state_copy.player_turn, n_rollouts)
                 visited.append(current_node)
@@ -209,6 +258,7 @@ class SchedulerAgent(Agent):
 
             current_node.expand(self.get_possible_targets(state_copy))
 
+            # when current node is root -
             if not current_node.is_leaf():
                 current_node = self.select(current_node, state_copy.player_turn, n_rollouts)
                 visited.append(current_node)
@@ -225,19 +275,23 @@ class SchedulerAgent(Agent):
             for _ in range(0, self.beta):
 
                 # Run the rollout.
-                _, rollout_return = self.rollout(state_copy)
-                # print(f"rollout return in choose_next_target(): {rollout_return}")
+                _, rollout_return, player_actions, external_agent_actions = self.rollout(state_copy)
                 n_rollouts += 1
 
                 # Backpropagate the returns.
-                for n in range(len(visited) - 1, -1, -1):
+                for n in range(len(visited) - 1, -1, -1):  # 倒序遍历：从最后一个visited开始，从后往前
                     visited[n].visits += 1
+                    # update the corresponding simulation action list
+                    visited[n].update_sim_actions(player_actions)
+                    visited[n].update_sim_external_actions(external_agent_actions)
                     for agent_idx in range(0, state_copy.n_agents):
 
                         # Update the backpropagated return for the previous node visited.
                         rollout_return[agent_idx] = returns[n][agent_idx] + (self.gamma ** steps_taken[n]) * rollout_return[agent_idx]
 
                         visited[n].total_return[agent_idx] += rollout_return[agent_idx]
+
+        # root_node.display_tree_structure()
 
         # --== Select the most promising child of the root node ==--
         selected = None
@@ -253,7 +307,10 @@ class SchedulerAgent(Agent):
                 selected = choice
                 best_eval = eval
 
-        # print(f"target in choose_next_target(): {selected.target}")
+        # update value for the agent
+        self.sim_self_actions = selected.sim_self_actions
+        self.sim_external_agent_actions = selected.sim_external_actions
+
         return selected.target, state.get_object_type_at_square(selected.target)
 
 
@@ -323,6 +380,10 @@ class SchedulerAgent(Agent):
 
     def perceive(self, reward:float, state:CooperativeCraftWorldState, terminal:bool, is_eval:bool):
 
+        # simulate external agent's action in case of hypo is None
+        if self.goal_recogniser.current_hypothesis is None:
+            self.goal_recogniser.update_hypothesis()
+
         if self.mcts_style == constants.I_RM:
 
             a = self.get_action_atomic(state)
@@ -344,23 +405,7 @@ class SchedulerAgent(Agent):
                     return random.randrange(state.action_space.n)
 
         # store the action
-        self.actions.append(a)
-        # if len(self.actions) >= 5:
-        #     last_five_actions = self.actions[-5:]
-        #     print(f"[scheduler.py] Agent {self.name} actions: {last_five_actions}")
-        # else:
-        #     print(f"[scheduler.py] Agent {self.name} actions: {self.actions}")
-
-        # simulate external agent's action
-        if self.goal_recogniser.current_hypothesis is None:
-            self.goal_recogniser.update_hypothesis()
-        external_agent_action = self.get_external_agent_sim_action(state)
-        self.external_agent_actions.append(external_agent_action)
-        # if len(self.external_agent_actions) >= 5:
-        #     last_five_actions = self.external_agent_actions[-5:]
-        #     print(f"[scheduler.py] Predicted actions: {last_five_actions}")
-        # else:
-        #     print(f"[scheduler.py] Predicted actions: {self.external_agent_actions}")
+        self.self_actions.append(a)
 
         return a
 
@@ -412,20 +457,40 @@ class SchedulerAgent(Agent):
 
 
     def get_action_atomic(self, state : CooperativeCraftWorldState) -> int:
+        print("---get_action_atomic()---")
 
         possible_actions = self.get_filtered_actions(state)
 
         # Can take shortcut if there not multiple possible actions.
         if len(possible_actions) == 0:
+            # update simulated actions for the agent
+            state_copy = copy.deepcopy(state)
+            _, _, player_actions, external_agent_actions = self.rollout(state_copy)  # Run the rollout
+            self.sim_self_actions = player_actions
+            self.sim_external_agent_actions = external_agent_actions
+
             return random.randrange(state.action_space.n)
         elif len(possible_actions) == 1:
+            # update simulated actions for the agent
+            state_copy = copy.deepcopy(state)
+            _, _, player_actions, external_agent_actions = self.rollout(state_copy)  # Run the rollout
+            self.sim_self_actions = player_actions
+            self.sim_external_agent_actions = external_agent_actions
+
             return list(possible_actions)[0]
 
         if self.beta == 0:
+            # update simulated actions for the agent
+            state_copy = copy.deepcopy(state)
+            _, _, player_actions, external_agent_actions = self.rollout(state_copy)  # Run the rollout
+            self.sim_self_actions = player_actions
+            self.sim_external_agent_actions = external_agent_actions
+
             possible_actions = list(possible_actions)
             return possible_actions[random.randrange(len(possible_actions))]
 
         # --== Main MCTS algorithm begins here ==--
+        print("-----MCTS-----")
 
         root_node = MCTS_Node(None, None, None, state.n_agents)
         n_rollouts = 0
@@ -444,9 +509,12 @@ class SchedulerAgent(Agent):
             current_node = root_node
             current_top_level_plan = None
             current_target = None
-            visited = [] # We don't actually need to backpropagate anything to the root node; only its children matter for final action selection.
+            visited = []
+                # We don't actually need to backpropagate anything to the root node;
+                # only its children matter for final action selection.
             rewards = []
 
+            # Selection phase: Navigate down the tree
             while not current_node.is_leaf():
                 current_node = self.select(current_node, state_copy.player_turn, n_rollouts)
                 if current_node.top_level_plan != plan._none_plan:
@@ -457,7 +525,8 @@ class SchedulerAgent(Agent):
                 r = state_copy.step(current_node.action, assumed_reward_func=assumed_reward_func)
 
                 rewards.append(r)
-        
+
+            # Expansion phase: Expand the tree node
             if state_copy.player_turn == self.agent_num:
                 expansion_possibilities = self.get_possible_actions_by_goal_plan(state_copy)
 
@@ -486,16 +555,19 @@ class SchedulerAgent(Agent):
 
                 rewards.append(r)
 
+            # Simulation phase: Simulate a rollout from the current node
             for _ in range(0, self.beta):
                 
                 # Run the rollout.
-                _, rollout_return = self.rollout(state_copy, top_level_plan=current_top_level_plan, target=current_target, print_debug=(alpha_iter > (self.alpha - 3)))
-                # print(f"rollout return in get_action_atomic(): {rollout_return}")
+                _, rollout_return, player_actions, external_agent_actions  = self.rollout(state_copy, top_level_plan=current_top_level_plan, target=current_target, print_debug=(alpha_iter > (self.alpha - 3)))
                 n_rollouts += 1
 
-                # Backpropagate the returns.
+                # Backpropagation phase: Backpropagate the returns.
                 for n in range(len(visited) - 1, -1, -1):
                     visited[n].visits += 1
+                    # update the corresponding simulation action list
+                    visited[n].update_sim_actions(player_actions)
+                    visited[n].update_sim_external_actions(external_agent_actions)
                     for agent_idx in range(0, state_copy.n_agents):
 
                         # Update the backpropagated return for the previous node visited.
@@ -518,7 +590,10 @@ class SchedulerAgent(Agent):
                 selected = choice
                 best_eval = eval
 
-        # print(f"action in get_action_atomic(): {selected.action}")
+        # update value for the agent
+        self.sim_self_actions = selected.sim_self_actions
+        self.sim_external_agent_actions = selected.sim_external_actions
+
         return selected.action
 
 
@@ -624,10 +699,12 @@ class SchedulerAgent(Agent):
 
     def rollout(self, state : CooperativeCraftWorldState, top_level_plan=None, target=None, print_debug=False):
         """
-        Returns:
+        Return:
             tuple: the simulated final state, and the cumulative rewards for each agent.
         """
         state_copy = copy.deepcopy(state)
+        player_actions = []  # 保存玩家选择的action
+        external_agent_actions = []  # 保存external agent选择的action
 
         if target is None:
             target_type = None
@@ -643,8 +720,10 @@ class SchedulerAgent(Agent):
                 action = random.randrange(state.action_space.n)
             elif state_copy.player_turn == self.agent_num:
                 top_level_plan, action, target, target_type = self.get_sim_action(state_copy, top_level_plan, target, target_type)
+                player_actions.append(action)  # 记录玩家选择的action
             else:
                 action = self.get_external_agent_sim_action(state_copy)
+                external_agent_actions.append(action)  # 记录external agent选择的action
 
             reward = state_copy.step(action)
 
@@ -653,9 +732,150 @@ class SchedulerAgent(Agent):
 
             steps_forward += 1
 
-        # print(f"rollout return: {state_copy, ret}")
-        return (state_copy, ret)
+        return (state_copy, ret, player_actions, external_agent_actions)
 
+    def my_get_external_agent_sim_action(self, state: object) -> List[int]:
+        if self.single_player:
+            return []
+
+        if self.external_agent_config is not None:
+                state_copy = copy.deepcopy(state)
+                sim_agent = copy.deepcopy(self)  # treat current agent as the sim agent
+                # Get a list of possible goals (hypotheses)
+                hypothesis_array = self.goal_recogniser.current_hypothesis.split("_and_")
+                sim_agent.goal_set = hypothesis_array
+                sim_agent.plans: List[plan.Plan] = []
+                for item in sim_agent.goal_set:
+                    sim_agent.plans.append(plan.str_to_plan(item, sim_agent.num_targets_per_item))
+                # Get possible actions
+                possible_targets = sim_agent.get_possible_targets(state)
+                possible_actions = set()
+                for target in possible_targets:
+                    a, _, _ = get_action_from_target(state_copy, target, state.get_object_type_at_square(target))
+                    possible_actions.add(a)
+                possible_actions = sorted(list(possible_actions))
+
+                # Can take shortcut if there not multiple possible actions
+                if (len(possible_actions) == 0 ) or (len(possible_actions) == 1):
+                    _, _, player_actions, external_agent_actions = sim_agent.rollout(state_copy)  # Run the rollout
+                    return player_actions
+
+                if sim_agent.beta == 0:
+                    _, _, player_actions, external_agent_actions = sim_agent.rollout(state_copy)  # Run the rollout
+                    sim_agent.sim_self_actions = player_actions
+                    sim_agent.sim_external_agent_actions = external_agent_actions
+                    return player_actions
+
+                # --== Main MCTS algorithm begins here ==--
+                root_node = MCTS_Node(None, None, None, state.n_agents)
+                n_rollouts = 0
+
+                for alpha_iter in range(0, sim_agent.alpha):
+
+                    sim_agent.model_choice_idx = -1
+
+                    if sim_agent.goal_recogniser is not None:
+                        sim_agent.goal_recogniser.update_hypothesis()
+                        assumed_reward_func = sim_agent.get_assumed_reward_func()
+                    else:
+                        assumed_reward_func = _reward
+
+                    state_copy = copy.deepcopy(state)
+                    current_node = root_node
+                    current_top_level_plan = None
+                    current_target = None
+                    visited = []
+                    # We don't actually need to backpropagate anything to the root node;
+                    # only its children matter for final action selection.
+                    rewards = []
+
+                while not current_node.is_leaf():
+                    current_node = sim_agent.select(current_node, state_copy.player_turn, n_rollouts)
+                    if current_node.top_level_plan != plan._none_plan:
+                        current_top_level_plan = current_node.top_level_plan
+                        current_target = current_node.target
+
+                    visited.append(current_node)
+                    r = state_copy.step(current_node.action, assumed_reward_func=assumed_reward_func)
+
+                    rewards.append(r)
+
+                if state_copy.player_turn == sim_agent.agent_num:
+                    expansion_possibilities = sim_agent.get_possible_actions_by_goal_plan(state_copy)
+
+                    if not constants.I_RM_TREE_POLICY_INTERLEAVE:
+                        # Narrow the expansion possibilities based on the top-level goal currently being pursued.
+                        if (current_top_level_plan is not None) and (current_target is not None) and (
+                        current_top_level_plan, current_target) in expansion_possibilities:
+                            expansion_possibilities = {
+                                (current_top_level_plan, current_target): expansion_possibilities[
+                                    (current_top_level_plan, current_target)]}
+
+                    current_node.expand(expansion_possibilities)
+
+                else:
+                    # The external agent isn't limited to actions from our plans.
+                    if sim_agent.single_player:
+                        current_node.expand({(plan._none_plan, None): [NO_OP]})
+                    else:
+                        current_node.expand({(plan._none_plan, None): list(range(0, state_copy.action_space.n))})
+
+                if not current_node.is_leaf():
+                    current_node = sim_agent.select(current_node, state_copy.player_turn, n_rollouts)
+                    if current_node.top_level_plan != plan._none_plan:
+                        current_top_level_plan = current_node.top_level_plan
+                        current_target = current_node.target
+
+                    visited.append(current_node)
+                    r = state_copy.step(current_node.action, assumed_reward_func=assumed_reward_func)
+
+                    rewards.append(r)
+
+                # Simulation phase: Simulate a rollout from the current node
+                for _ in range(0, sim_agent.beta):
+
+                    # Run the rollout.
+                    _, rollout_return, player_actions, external_agent_actions = sim_agent.rollout(state_copy,
+                                                                                             top_level_plan=current_top_level_plan,
+                                                                                             target=current_target,
+                                                                                             print_debug=(
+                                                                                                         alpha_iter > (
+                                                                                                             sim_agent.alpha - 3)))
+                    n_rollouts += 1
+
+                    # Backpropagate the returns.
+                    for n in range(len(visited) - 1, -1, -1):
+                        visited[n].visits += 1
+                        # update the corresponding simulation action list
+                        visited[n].update_sim_actions(player_actions)
+                        visited[n].update_sim_external_actions(external_agent_actions)
+                        for agent_idx in range(0, state_copy.n_agents):
+                            # Update the backpropagated return for the previous node visited.
+                            rollout_return[agent_idx] = rewards[n][agent_idx] + sim_agent.gamma * rollout_return[
+                                agent_idx]
+
+                            visited[n].total_return[agent_idx] += rollout_return[agent_idx]
+
+                # After simulations, select the most promising child from the root node
+                selected = None
+                best_eval = float('-inf')
+
+                for choice in root_node.children:
+
+                    # Note: This currently assumes that there are only two agents in the environment.
+                    # 根据rollout更新的total return来计算eval值，选出最大的结果
+                    eval = (choice.total_return[sim_agent.agent_num] + sim_agent.get_allegiance() * choice.total_return[
+                        1 - sim_agent.agent_num]) / (choice.visits + tiny_val) \
+                           + tiny_val * random.random()  # For tie-breaking
+
+                    if eval > best_eval:
+                        selected = choice
+                        best_eval = eval
+
+                return sim_agent.sim_self_actions
+
+        else:
+            return [random.randrange(state.action_space.n)]
 
 # Returns a 3-tuple representing <action, updated_target, updated_target_type>
 def get_action_from_target(state : CooperativeCraftWorldState, target : Vector2D, target_type : string):
@@ -681,12 +901,14 @@ def get_action_from_target(state : CooperativeCraftWorldState, target : Vector2D
 
         return (action, None, None)
 
+    # 水平位置更大：左右移动
     elif abs(p_pos.x - target.x) > abs(p_pos.y - target.y):
         if p_pos.x < target.x:
             return (RIGHT, target, target_type)
         elif p_pos.x > target.x:
             return (LEFT, target, target_type)
-            
+
+    # 垂直距离更大：上下移动
     else:
         if p_pos.y < target.y:
             return (UP, target, target_type)
