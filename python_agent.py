@@ -14,6 +14,7 @@ from dqn import DQN_Config
 from policy import eGreedyPolicy
 from scheduler_agent import SchedulerAgent
 from evaluation import evaluation_function, simple_similarity_f
+import time
 
 ctx = decimal.Context()
 ctx.prec = 20
@@ -44,7 +45,7 @@ env_name = "cooperative_craft_world"
 num_seeds = -1
 max_steps = 100
 size=(7, 7)
-max_training_frames = 999999999
+max_training_frames = 5000
 
 current_scenario = scenario.scenarios[sys.argv[1]]
 
@@ -392,20 +393,48 @@ if agent_params["eval_mode"]:
     with open(agent_params["log_dir"] + results_filename, 'w') as fd:
         fd.write('seed,ext_agent,eval_agent,ext_agent_score,eval_agent_score\n')
 
+my_eval_scores = []
+# OUTPUT: my evaluation score
+my_evaluation_file_name = 'eval_' + sys.argv[1] + '.csv'
+with open(agent_params["log_dir"] + my_evaluation_file_name, 'w') as fd:
+    fd.write('seed, scores\n')
+
+my_times = []
+# OUTPUT: time cost
+my_time_cost_file_name = 'time_' + sys.argv[1] + '.csv'
+with open(agent_params["log_dir"] + my_time_cost_file_name, 'w') as fd:
+    fd.write('seed, times\n')
+
 while frame_num < max_training_frames:
 
     agent_idx = state.player_turn
+    if (agent_idx == 0):
+        print(f"Agent 0, Frame {frame_num}")
+    else:
+        print(f"Agent 1, Frame {frame_num}")
 
     a = agents[agent_idx].perceive(reward[agent_idx], state, done, is_eval)
-    if agent_idx == 1:
-        print(f"Frame {frame_num}")
-        print(f"Agent {agents[agent_idx].name}")
-        print(f"Goal {agents[agent_idx].goal_set}")
-        print(f"Action {agents[agent_idx].actions}")
-        print(f"Paired predicted actions {agents[agent_idx].external_agent_actions}")
-        print(f"Paired actual    actions {agents[0].actions}")
 
-    # If we're in multiagent mode, and the other agent has a goal recogniser, update its goal probabilities.
+    if (agent_idx == 0):
+        print(f"    Real Action List {agents[0].self_actions}")
+        print(f"    Sim Action List  {agents[0].sim_self_actions}")  # TODO: stay
+    if (agent_idx == 1):
+        print(f"    Goal {agents[1].goal_set}")
+        print(f"    Real Action List        {agents[1].self_actions}")
+        print(f"    Sim Action List         {agents[1].sim_self_actions}")
+        print(f"    Sim Agent 0 Action List {agents[1].sim_external_agent_actions}")  # TODO: stay
+        start_time = time.time()
+        test_sim_external_agent_actions = agents[1].my_get_external_agent_sim_action(state)
+        end_time = time.time()
+        my_times.append(end_time-start_time)
+        print(f"   Test Agent 0 Action List {test_sim_external_agent_actions}")
+
+        # OUTPUT: my evaluation score
+        my_eval_score = evaluation_function(agents[0].sim_self_actions, test_sim_external_agent_actions,
+                                            simple_similarity_f, alpha=0.7)
+        my_eval_scores.append(my_eval_score)
+
+    # If we're in multi-agent mode, and the other agent has a goal recogniser, update its goal probabilities.
     if n_agents == 2 and isinstance(agents[1 - agent_idx], SchedulerAgent) and agents[1 - agent_idx].goal_recogniser is not None:
         agents[1 - agent_idx].goal_recogniser.perceive(state, a)
 
@@ -442,15 +471,26 @@ while frame_num < max_training_frames:
 
             # OUTPUT: terminal
             print('Time step: ' + str(frame_num) + ', ep scores:' + score_str[1:])
-            my_eval_score = evaluation_function(agents[0].actions, agents[1].external_agent_actions,
-                                                simple_similarity_f, alpha=0.7)
-            print(f"Score: {my_eval_score}")
 
             # OUTPUT: result_scenario_n.csv (2) results
             if agent_params["eval_mode"]:
                 with open(agent_params["log_dir"] + results_filename, 'a') as fd:
-                    fd.write("'" + float_to_str(seed) + ',' + agents[0].name + ',' + agents[1].name + ',' + str(total_reward[0]) + ',' + str(total_reward[1]) + ',' + float_to_str(my_eval_score) +'\n')
+                    fd.write("'" + float_to_str(seed) + ',' + agents[0].name + ',' + agents[1].name + ',' + str(total_reward[0]) + ',' + str(total_reward[1]) + '\n')
                     # fd.write("'" + float_to_str(seed) + ',' + agents[0].name + ',' + agents[1].name + ',' + str(total_reward[0]) + ',' + str(total_reward[1]) + '\n')
+
+            if my_eval_scores:
+                with open(agent_params["log_dir"] + my_evaluation_file_name, 'a') as fd:
+                    eval_scores_str = ', '.join(float_to_str(score) for score in my_eval_scores)
+                    fd.write(f"'{float_to_str(seed)}, {eval_scores_str}\n")
+
+                my_eval_scores = []
+
+            if my_times:
+                with open(agent_params["log_dir"] + my_time_cost_file_name, 'a') as fd:
+                    time_str = ', '.join(float_to_str(time) for time in my_times)
+                    fd.write(f"'{float_to_str(seed)}, {time_str}\n")
+
+                my_times = []
 
         reset_all()
 
